@@ -30,11 +30,14 @@ def tokenize_prompt_and_output(
     for p_ids, o_ids in zip(prompt_input_ids, output_input_ids):
         # concat
         input_ids = torch.cat([p_ids, o_ids], dim=0)
-        response_mask = torch.cat([torch.zeros_like(p_ids), torch.ones_like(o_ids)], dim=0)
+        response_mask = torch.cat([
+            torch.zeros_like(p_ids, dtype=torch.bool),  # False for prompt
+            torch.ones_like(o_ids, dtype=torch.bool)     # True for output
+        ], dim=0)
         # and then pad
         pad_length = max_length - input_ids.shape[0]
         padded_input_ids = torch.nn.functional.pad(input_ids, (0, pad_length), value=tokenizer.pad_token_id)
-        padded_response_mask = torch.nn.functional.pad(response_mask, (0, pad_length), value=0)
+        padded_response_mask = torch.nn.functional.pad(response_mask, (0, pad_length), value=False)
 
         concatenated_input_ids.append(padded_input_ids[:-1])
         concatenated_labels.append(padded_input_ids[1:])
