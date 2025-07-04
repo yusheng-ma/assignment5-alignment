@@ -39,6 +39,7 @@ def init_vllm(model_id: str, device: str, seed: int, gpu_memory_utilization: flo
             device=device,
             dtype=torch.bfloat16,
             enable_prefix_caching=True,
+            gpu_memory_utilization=gpu_memory_utilization,
         )
     
 def load_policy_into_vllm_instance(policy: torch.nn.Module, llm: LLM):
@@ -74,17 +75,17 @@ def to_float(val):
 def main():
     # algo1
     model_id = "Qwen/Qwen2.5-Math-1.5B"
-    device_train = "cuda:0"
-    device_vllm = "cuda:1"
+    device_train = "cuda:2"
+    device_vllm = "cuda"
     output_dir = "./outputs/sft"
     train_file_path = "./data/gsm8k/processed_train.jsonl"
     test_file_path = "./data/gsm8k/test.jsonl"
     TEMPLATE_PATH = "cs336_alignment/prompts/r1_zero.prompt" # for testing
     micro_batch_size = 2
 
-    n_sft_steps = 69
-    n_grad_accum_steps = 4
-    eval_steps = 3
+    n_sft_steps = 64
+    n_grad_accum_steps = 32
+    eval_steps = 8
 
     # input initial policy model
     model = AutoModelForCausalLM.from_pretrained(
@@ -102,9 +103,9 @@ def main():
         dtype=torch.bfloat16,
     )
     
-    model = torch.compile(model)
+    # model = torch.compile(model)
 
-    # vllm = init_vllm(model_id, device_vllm, seed=SEED)
+    vllm = init_vllm(model_id, device_vllm, seed=SEED, gpu_memory_utilization=0.9)
     # initial sft dataset D
     train_data = load_jsonl(train_file_path)
     test_data = load_jsonl(test_file_path)
@@ -116,9 +117,9 @@ def main():
     )
     # for k, v in tokenized_train_data.items():
     #     print(v.dtype)
-    # formatted_test_prompts = [
-    #     format_prompt_with_template(example["question"], TEMPLATE_PATH) for example in test_data
-    # ]
+    formatted_test_prompts = [
+        format_prompt_with_template(example["question"], TEMPLATE_PATH) for example in test_data
+    ]
 
     # policy model <- policy model
     # for step = 1 ... n_sft_steps
@@ -165,32 +166,31 @@ def main():
 
         if i_sft_step % eval_steps == 0:
             # use vllm to eval 0.0
-            # vllm = init_vllm(model_id, device_vllm, seed=SEED)
-            # load_policy_into_vllm_instance(model, vllm)
+            load_policy_into_vllm_instance(model, vllm)
 
-            # sampling_params =  SamplingParams(
-            #     temperature=1.0, top_p=1.0, max_tokens=1024, stop=["</answer>"], include_stop_str_in_output=True
-            # )
-            # counts, format_errors, answer_errors = evaluate_vllm(
-            #     vllm_model=vllm,
-            #     reward_fn=r1_zero_reward_fn,
-            #     data=test_data,
-            #     prompts=formatted_test_prompts,
-            #     eval_sampling_params=sampling_params
-            # )
+            sampling_params =  SamplingParams(
+                temperature=1.0, top_p=1.0, max_tokens=1024, stop=["</answer>"], include_stop_str_in_output=True
+            )
+            counts, format_errors, answer_errors = evaluate_vllm(
+                vllm_model=vllm,
+                reward_fn=r1_zero_reward_fn,
+                data=test_data,
+                prompts=formatted_test_prompts,
+                eval_sampling_params=sampling_params
+            )
 
             # log eval generation
             print(f"\n📊 Evaluation Summary at Step {i_sft_step}:")
-            # print(f"Correct (format + answer): {counts['correct']}")
-            # print(f"Wrong answer (but correct format): {counts['wrong_answer']}")
-            # print(f"Wrong format: {counts['wrong_format']}")
+            print(f"Correct (format + answer): {counts['correct']}")
+            print(f"Wrong answer (but correct format): {counts['wrong_answer']}")
+            print(f"Wrong format: {counts['wrong_format']}")
 
-            # wandb.log({
-            #     "eval/correct": counts["correct"],
-            #     "eval/wrong_answer": counts["wrong_answer"],
-            #     "eval/wrong_format": counts["wrong_format"],
-            #     "eval_step": i_sft_step
-            # })
+            wandb.log({
+                "eval/correct": counts["correct"],
+                "eval/wrong_answer": counts["wrong_answer"],
+                "eval/wrong_format": counts["wrong_format"],
+                "eval_step": i_sft_step
+            })
 
             model.save_pretrained(save_directory=output_dir)
             tokenizer.save_pretrained(save_directory=output_dir)
