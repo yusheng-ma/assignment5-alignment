@@ -18,7 +18,7 @@ from cs336_alignment.utilities import (
 from cs336_alignment.evaluate_vllm import evaluate_vllm
 
 SEED = 69
-
+torch.manual_seed(SEED)
 random.seed(SEED)
 
 def init_vllm(model_id: str, device: str, seed: int, gpu_memory_utilization: float = 0.85):
@@ -80,7 +80,7 @@ def main():
     train_file_path = "./data/gsm8k/processed_train.jsonl"
     test_file_path = "./data/gsm8k/test.jsonl"
     TEMPLATE_PATH = "cs336_alignment/prompts/r1_zero.prompt" # for testing
-    micro_batch_size = 4
+    micro_batch_size = 2
 
     n_sft_steps = 69
     n_grad_accum_steps = 4
@@ -104,7 +104,7 @@ def main():
     
     model = torch.compile(model)
 
-    vllm = init_vllm(model_id, device_vllm, seed=SEED)
+    # vllm = init_vllm(model_id, device_vllm, seed=SEED)
     # initial sft dataset D
     train_data = load_jsonl(train_file_path)
     test_data = load_jsonl(test_file_path)
@@ -116,9 +116,9 @@ def main():
     )
     # for k, v in tokenized_train_data.items():
     #     print(v.dtype)
-    formatted_test_prompts = [
-        format_prompt_with_template(example["question"], TEMPLATE_PATH) for example in test_data
-    ]
+    # formatted_test_prompts = [
+    #     format_prompt_with_template(example["question"], TEMPLATE_PATH) for example in test_data
+    # ]
 
     # policy model <- policy model
     # for step = 1 ... n_sft_steps
@@ -140,7 +140,7 @@ def main():
                 next_batch = get_batch(tokenized_train_data, micro_batch_size, device_train)
 
                 # update parameters (gradient step, cross enotropy)
-                loss, _ = sft_microbatch_train_step(log_probs, response_mask, j_grad_accum_step)
+                loss, _ = sft_microbatch_train_step(log_probs, response_mask, n_grad_accum_steps)
 
                 if j_grad_accum_step == n_grad_accum_steps - 1:
                     # i think we need to do something here
@@ -158,38 +158,39 @@ def main():
                         "train/entropy": to_float(entropy.mean()),
                         "train_step": i_sft_step,
                     })
-        train_batch = next_batch
-        input_ids = train_batch["input_ids"].to(device_train)
-        labels = train_batch["labels"].to(device_train)
-        response_mask = train_batch["response_mask"].to(device_train)
+            train_batch = next_batch
+            input_ids = train_batch["input_ids"].to(device_train)
+            labels = train_batch["labels"].to(device_train)
+            response_mask = train_batch["response_mask"].to(device_train)
 
         if i_sft_step % eval_steps == 0:
             # use vllm to eval 0.0
-            load_policy_into_vllm_instance(model, vllm)
+            # vllm = init_vllm(model_id, device_vllm, seed=SEED)
+            # load_policy_into_vllm_instance(model, vllm)
 
-            sampling_params =  SamplingParams(
-                temperature=1.0, top_p=1.0, max_tokens=1024, stop=["</answer>"], include_stop_str_in_output=True
-            )
-            counts, format_errors, answer_errors = evaluate_vllm(
-                vllm_model=vllm,
-                reward_fn=r1_zero_reward_fn,
-                data=test_data,
-                prompts=formatted_test_prompts,
-                eval_sampling_params=sampling_params
-            )
+            # sampling_params =  SamplingParams(
+            #     temperature=1.0, top_p=1.0, max_tokens=1024, stop=["</answer>"], include_stop_str_in_output=True
+            # )
+            # counts, format_errors, answer_errors = evaluate_vllm(
+            #     vllm_model=vllm,
+            #     reward_fn=r1_zero_reward_fn,
+            #     data=test_data,
+            #     prompts=formatted_test_prompts,
+            #     eval_sampling_params=sampling_params
+            # )
 
             # log eval generation
             print(f"\n📊 Evaluation Summary at Step {i_sft_step}:")
-            print(f"Correct (format + answer): {counts['correct']}")
-            print(f"Wrong answer (but correct format): {counts['wrong_answer']}")
-            print(f"Wrong format: {counts['wrong_format']}")
+            # print(f"Correct (format + answer): {counts['correct']}")
+            # print(f"Wrong answer (but correct format): {counts['wrong_answer']}")
+            # print(f"Wrong format: {counts['wrong_format']}")
 
-            wandb.log({
-                "eval/correct": counts["correct"],
-                "eval/wrong_answer": counts["wrong_answer"],
-                "eval/wrong_format": counts["wrong_format"],
-                "eval_step": i_sft_step
-            })
+            # wandb.log({
+            #     "eval/correct": counts["correct"],
+            #     "eval/wrong_answer": counts["wrong_answer"],
+            #     "eval/wrong_format": counts["wrong_format"],
+            #     "eval_step": i_sft_step
+            # })
 
             model.save_pretrained(save_directory=output_dir)
             tokenizer.save_pretrained(save_directory=output_dir)
@@ -199,14 +200,6 @@ if __name__ == "__main__":
     wandb.init(
         entity="koala34025-national-tsing-hua-university",
         project="sft_experiment",
-        config={
-            "model_id": "Qwen/Qwen2.5-Math-1.5B",
-            "batch_size": 32,
-            "n_sft_steps": 69,
-            "n_grad_accum_steps": 4,
-            "eval_steps": 3,
-            "seed": SEED,
-        }
     )
 
     wandb.define_metric("train_step")
