@@ -103,7 +103,7 @@ def main():
 
     # prompts
     # 1. load data/gsm8k/test.jsonl
-    data = load_jsonl("data/gsm8k/test.jsonl")
+    data = load_jsonl("data/gsm8k/train.jsonl")
 
     # 2. format and use r1_zero prompt cs336_alignment/prompts/r1_zero.prompt
     TEMPLATE_PATH = "cs336_alignment/prompts/r1_zero.prompt"
