@@ -7,6 +7,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from vllm import LLM, SamplingParams
 from vllm.model_executor import set_random_seed as vllm_set_random_seed
 from unittest.mock import patch
+from argparse import ArgumentParser
 
 from cs336_alignment.drgrpo_grader import r1_zero_reward_fn
 
@@ -72,7 +73,7 @@ def to_float(val):
         return val.float().item()
     return float(val)
 
-def main():
+def main(num_train_sample=None):
     # algo1
     model_id = "Qwen/Qwen2.5-Math-1.5B"
     device_train = "cuda:2"
@@ -108,6 +109,8 @@ def main():
     vllm = init_vllm(model_id, device_vllm, seed=SEED, gpu_memory_utilization=0.9)
     # initial sft dataset D
     train_data = load_jsonl(train_file_path)
+    if num_train_sample is not None:
+        train_data = train_data[:num_train_sample]
     test_data = load_jsonl(test_file_path)
 
     tokenized_train_data = tokenize_prompt_and_output(
@@ -151,20 +154,20 @@ def main():
 
                     optimizer.zero_grad()
                     # log train generation
-                    print(f"\n📊 Training Summary at Step {i_sft_step}:")
+                    print(f"\n📊 Training Summary at Step {i_sft_step + 1}:")
                     print(f"Loss: {loss:.6f}")
                     print(f"Entropy: {entropy.mean().item():.6f}")
                     wandb.log({
                         "train/loss": to_float(loss),
                         "train/entropy": to_float(entropy.mean()),
-                        "train_step": i_sft_step,
+                        "train_step": i_sft_step + 1,
                     })
             train_batch = next_batch
             input_ids = train_batch["input_ids"].to(device_train)
             labels = train_batch["labels"].to(device_train)
             response_mask = train_batch["response_mask"].to(device_train)
 
-        if i_sft_step % eval_steps == 0:
+        if (i_sft_step + 1) % eval_steps == 0 or i_sft_step == 0:
             # use vllm to eval 0.0
             load_policy_into_vllm_instance(model, vllm)
 
@@ -180,26 +183,68 @@ def main():
             )
 
             # log eval generation
-            print(f"\n📊 Evaluation Summary at Step {i_sft_step}:")
+            accuracy = counts['correct'] / len(formatted_test_prompts)
+            print(f"\n📊 Evaluation Summary at Step {i_sft_step + 1}:")
             print(f"Correct (format + answer): {counts['correct']}")
             print(f"Wrong answer (but correct format): {counts['wrong_answer']}")
             print(f"Wrong format: {counts['wrong_format']}")
-
+            print(f"Accuracy: {accuracy}")
             wandb.log({
                 "eval/correct": counts["correct"],
                 "eval/wrong_answer": counts["wrong_answer"],
                 "eval/wrong_format": counts["wrong_format"],
-                "eval_step": i_sft_step
+                "eval/accuracy": accuracy,
+                "eval_step": i_sft_step + 1,
             })
 
             model.save_pretrained(save_directory=output_dir)
             tokenizer.save_pretrained(save_directory=output_dir)
 
+    if n_sft_steps % eval_steps != 0:
+        # one last time
+        load_policy_into_vllm_instance(model, vllm)
+
+        sampling_params =  SamplingParams(
+            temperature=1.0, top_p=1.0, max_tokens=1024, stop=["</answer>"], include_stop_str_in_output=True
+        )
+        counts, format_errors, answer_errors = evaluate_vllm(
+            vllm_model=vllm,
+            reward_fn=r1_zero_reward_fn,
+            data=test_data,
+            prompts=formatted_test_prompts,
+            eval_sampling_params=sampling_params
+        )
+
+        # log eval generation
+        accuracy = counts['correct'] / len(formatted_test_prompts)
+        print(f"\n📊 Evaluation Summary at Step {n_sft_steps}:")
+        print(f"Correct (format + answer): {counts['correct']}")
+        print(f"Wrong answer (but correct format): {counts['wrong_answer']}")
+        print(f"Wrong format: {counts['wrong_format']}")
+        print(f"Accuracy: {accuracy}")
+        wandb.log({
+            "eval/correct": counts["correct"],
+            "eval/wrong_answer": counts["wrong_answer"],
+            "eval/wrong_format": counts["wrong_format"],
+            "eval/accuracy": accuracy,
+            "eval_step": n_sft_steps,
+        })
+
+        model.save_pretrained(save_directory=output_dir)
+        tokenizer.save_pretrained(save_directory=output_dir)
+
 
 if __name__ == "__main__":
+    parser = ArgumentParser()
+    parser.add_argument("--num_train_sample", type=int, default=None)
+    args = parser.parse_args()
+
     wandb.init(
         entity="koala34025-national-tsing-hua-university",
         project="sft_experiment",
+        config={
+            "num_train_sample": args.num_train_sample
+        }
     )
 
     wandb.define_metric("train_step")
@@ -209,4 +254,4 @@ if __name__ == "__main__":
 
     wandb.define_metric("eval/*", step_metric="eval_step")
 
-    main()
+    main(args.num_train_sample)
