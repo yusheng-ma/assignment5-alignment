@@ -73,13 +73,17 @@ def to_float(val):
         return val.float().item()
     return float(val)
 
-def main(num_train_sample=None):
+def main(args):
+    num_train_sample = args.num_train_sample
     # algo1
     model_id = "Qwen/Qwen2.5-Math-1.5B"
     device_train = "cuda:2"
     device_vllm = "cuda"
     output_dir = "./outputs/sft"
-    train_file_path = "./data/gsm8k/processed_train.jsonl"
+    if args.use_corrupted:
+        train_file_path = "./data/gsm8k/processed_train_corrupted.jsonl"
+    else:
+        train_file_path = "./data/gsm8k/processed_train.jsonl"
     test_file_path = "./data/gsm8k/test.jsonl"
     TEMPLATE_PATH = "cs336_alignment/prompts/r1_zero.prompt" # for testing
     micro_batch_size = 2
@@ -237,14 +241,13 @@ def main(num_train_sample=None):
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--num_train_sample", type=int, default=None)
+    parser.add_argument("--use_corrupted", action='store_true')
     args = parser.parse_args()
 
     wandb.init(
         entity="koala34025-national-tsing-hua-university",
         project="sft_experiment",
-        config={
-            "num_train_sample": args.num_train_sample
-        }
+        config=args,
     )
 
     wandb.define_metric("train_step")
@@ -254,4 +257,4 @@ if __name__ == "__main__":
 
     wandb.define_metric("eval/*", step_metric="eval_step")
 
-    main(args.num_train_sample)
+    main(args)
